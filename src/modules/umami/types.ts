@@ -45,6 +45,7 @@ type MetricType =
   | 'path'
   | 'entry'
   | 'exit'
+  | 'query'
   | 'referrer'
   | 'channel'
   | 'domain'
@@ -63,7 +64,7 @@ type MetricType =
   | 'distinctId';
 
 interface MetricEntry {
-  x: string;
+  x: string | null;
   y: number;
 }
 
