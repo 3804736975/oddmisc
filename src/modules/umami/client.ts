@@ -31,6 +31,18 @@ function toStatsResult(data: StatsAPIResponse): StatsResult {
   return result;
 }
 
+function getPathFromUrl(url: string): { path: string; hostname: string } {
+  try {
+    const parsed = new URL(url);
+    return {
+      path: `${parsed.pathname || '/'}${parsed.search}`,
+      hostname: parsed.hostname
+    };
+  } catch (error) {
+    throw new UmamiUrlError(`无效的页面 URL: ${error instanceof Error ? error.message : '未知错误'}`);
+  }
+}
+
 export class UmamiClient {
   private baseUrl: string;
   private shareId: string;
@@ -55,8 +67,8 @@ export class UmamiClient {
     options: Partial<StatsQueryParams> = {}
   ): Promise<StatsResult> {
     const data = await this.api.getStats(this.baseUrl, this.shareId, {
-      path: `eq.${path}`,
-      ...options
+      ...options,
+      path: `eq.${path}`
     });
     return toStatsResult(data);
   }
@@ -65,9 +77,11 @@ export class UmamiClient {
     url: string,
     options: Partial<StatsQueryParams> = {}
   ): Promise<StatsResult> {
+    const { path, hostname } = getPathFromUrl(url);
     const data = await this.api.getStats(this.baseUrl, this.shareId, {
-      url,
-      ...options
+      ...options,
+      path: `eq.${path}`,
+      hostname: `eq.${hostname}`
     });
     return toStatsResult(data);
   }

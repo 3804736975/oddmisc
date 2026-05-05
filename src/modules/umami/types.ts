@@ -5,6 +5,7 @@ interface UmamiConfig {
 
 interface StatsQueryParams {
   path?: string;
+  hostname?: string;
   url?: string;
   /** 毫秒时间戳，默认 `0`（建站起） */
   startAt?: number;
@@ -42,7 +43,12 @@ interface ShareData {
 /** Umami v2 支持的聚合维度；`url` / `host` 在 cloud 上会返回 400，所以不包含。 */
 type MetricType =
   | 'path'
+  | 'entry'
+  | 'exit'
   | 'referrer'
+  | 'channel'
+  | 'domain'
+  | 'hostname'
   | 'browser'
   | 'os'
   | 'device'
@@ -53,7 +59,8 @@ type MetricType =
   | 'title'
   | 'language'
   | 'screen'
-  | 'tag';
+  | 'tag'
+  | 'distinctId';
 
 interface MetricEntry {
   x: string;
