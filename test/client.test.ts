@@ -41,7 +41,7 @@ describe('UmamiClient', () => {
     expect(result).toMatchObject({ pageviews: 11, visitors: 22, visits: 33 });
   });
 
-  it('sends a url filter when calling getPageStatsByUrl', async () => {
+  it('converts full URLs to path and hostname filters in getPageStatsByUrl', async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ websiteId: 'w1', token: 't1' }) } as unknown as Response)
       .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ pageviews: 1, visitors: 1, visits: 1 }) } as unknown as Response);
@@ -49,10 +49,17 @@ describe('UmamiClient', () => {
 
     const client = createUmamiClient({ shareUrl: SHARE_URL });
     client.clearCache();
-    await client.getPageStatsByUrl('https://site.example/page');
+    await client.getPageStatsByUrl('https://site.example/page?a=1');
 
     const statsCall = fetchMock.mock.calls[1][0] as string;
-    expect(statsCall).toContain('url=https%3A%2F%2Fsite.example%2Fpage');
+    expect(statsCall).toContain('path=eq.%2Fpage%3Fa%3D1');
+    expect(statsCall).toContain('hostname=eq.site.example');
+    expect(statsCall).not.toContain('url=');
+  });
+
+  it('throws UmamiUrlError when getPageStatsByUrl receives an invalid URL', async () => {
+    const client = createUmamiClient({ shareUrl: SHARE_URL });
+    await expect(client.getPageStatsByUrl('/page')).rejects.toBeInstanceOf(UmamiUrlError);
   });
 
   it('exposes bounces / totaltime / comparison from stats response', async () => {

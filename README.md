@@ -127,7 +127,7 @@ window.addEventListener('oddmisc-ready', (e) => {
 | 方法 | 说明 |
 | --- | --- |
 | `getPageStats(path, options?)` | 按 `path` 查询（底层等价于 `path=eq.<path>`） |
-| `getPageStatsByUrl(url, options?)` | 按完整 URL 查询 |
+| `getPageStatsByUrl(url, options?)` | 按完整 URL 查询（内部会转为 Umami 实际使用的 `path` + `hostname` 过滤） |
 | `getSiteStats(options?)` | 站点整体统计 |
 | `getActiveVisitors()` | 当前在线访客数（实时，不缓存） |
 | `getPageviews({ startAt, endAt, unit, timezone }?)` | 按时间聚合的 `pageviews` / `sessions` 序列 |
@@ -138,7 +138,7 @@ window.addEventListener('oddmisc-ready', (e) => {
 
 `options` 支持 `startAt` / `endAt`（毫秒时间戳），默认 `startAt=0` 到 `endAt=Date.now()`，即「建站起至今」。
 
-`getMetrics(type)` 支持的维度（与 Umami v2 对齐）：`path`、`referrer`、`browser`、`os`、`device`、`country`、`region`、`city`、`event`、`title`、`language`、`screen`、`tag`。**注意** `cloud.umami.is` 对 `url` / `host` 会返回 400，因此这两种没有放在类型中。
+`getMetrics(type)` 支持的维度（与 Umami v2 对齐）：`path`、`entry`、`exit`、`title`、`query`、`referrer`、`channel`、`domain`、`hostname`、`country`、`region`、`city`、`browser`、`os`、`device`、`language`、`screen`、`event`、`tag`、`distinctId`。**注意** `cloud.umami.is` 对 `url` / `host` 会返回 400，因此这两种没有放在类型中。
 
 统一的统计返回结构：
 
@@ -195,7 +195,7 @@ initUmamiRuntime({ shareUrl: 'https://.../share/<id>' });
 
 - `GET /api/share/<shareId>` — 解析 shareId，得到 `websiteId` + JWT `token`
 - `GET /api/websites/<websiteId>` — 网站元信息
-- `GET /api/websites/<websiteId>/stats?startAt&endAt[&path|url]` — 聚合统计
+- `GET /api/websites/<websiteId>/stats?startAt&endAt[&path|hostname]` — 聚合统计
 - `GET /api/websites/<websiteId>/active` — 当前在线访客
 - `GET /api/websites/<websiteId>/pageviews?startAt&endAt&unit&timezone` — 时间序列
 - `GET /api/websites/<websiteId>/metrics?startAt&endAt&type[&limit]` — TopN 聚合

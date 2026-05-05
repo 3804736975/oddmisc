@@ -18,6 +18,7 @@ const SHARE_CONTEXT_VALUE = '1';
 
 interface StatsAPIParams extends Partial<StatsQueryParams> {
   path?: string;
+  hostname?: string;
   url?: string;
 }
 
@@ -125,6 +126,7 @@ export class UmamiAPI {
     const { websiteId } = await this.getShareData(baseUrl, shareId);
     const qp = this.buildRangeQuery(params);
     if (params.path) qp.set('path', params.path);
+    if (params.hostname) qp.set('hostname', params.hostname);
     if (params.url) qp.set('url', params.url);
     return this.cachedGet<StatsAPIResponse>(
       baseUrl,
