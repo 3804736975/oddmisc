@@ -71,6 +71,8 @@ describe('UmamiAPI.getStats', () => {
   });
 
   it('returns cached response on the second call without calling fetch again', async () => {
+    let now = 1000;
+    vi.spyOn(Date, 'now').mockImplementation(() => now);
     const fetchMock = vi.fn()
       .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ websiteId: 'w1', token: 't1' }) } as unknown as Response)
       .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ pageviews: 5, visitors: 6, visits: 7 }) } as unknown as Response);
@@ -79,6 +81,7 @@ describe('UmamiAPI.getStats', () => {
     const first = await api.getStats(BASE, SHARE_ID, { path: 'eq./a' });
     expect(first._fromCache).toBeUndefined();
 
+    now = 2000;
     const second = await api.getStats(BASE, SHARE_ID, { path: 'eq./a' });
     expect(second._fromCache).toBe(true);
     expect(fetchMock).toHaveBeenCalledTimes(2);
