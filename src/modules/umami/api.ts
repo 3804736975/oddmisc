@@ -11,12 +11,11 @@ import { CacheManager } from '../../utils/umami/cache';
 import { fetchWithTimeout } from '../../utils/fetch';
 import { UmamiNetworkError, UmamiAuthError } from '../../errors';
 
-// cloud.umami.is / 新版自托管 Umami 的 share token 鉴权必须带上此 context 头，
-// 否则 /websites/* 一律 401。
+// cloud.umami.is 需要此 header，否则 401
 const SHARE_CONTEXT_HEADER = 'x-umami-share-context';
 const SHARE_CONTEXT_VALUE = '1';
 
-/** 5 分钟对齐粒度（ms），用于 endAt 默认值，减少不必要的缓存未命中 */
+// endAt 默认值按 5 分钟对齐，减少缓存未命中
 const RANGE_ALIGN_MS = 5 * 60_000;
 
 interface StatsAPIParams extends Partial<StatsQueryParams> {
@@ -59,7 +58,6 @@ export interface MetricsParams extends TimeRange {
 type Cached<T> = T & { _fromCache?: boolean };
 
 export class UmamiAPI {
-  /** 按 `baseUrl|shareId` 索引的 share data 缓存，避免单例冲突 */
   private sharePromises = new Map<string, Promise<ShareData>>();
 
   constructor(private readonly cacheManager: CacheManager) {}
@@ -108,7 +106,6 @@ export class UmamiAPI {
 
     if (!res.ok) {
       if (res.status === 401) {
-        // 只清除当前 share 的认证缓存，不清空所有统计数据缓存
         this.sharePromises.delete(this.shareKey(baseUrl, shareId));
         throw new UmamiAuthError('认证失败，请检查 shareId', res.status);
       }
@@ -130,22 +127,13 @@ export class UmamiAPI {
     return data;
   }
 
-  /**
-   * 构建发送给 Umami API 的时间范围参数。
-   * 当用户没有指定 endAt 时，按 RANGE_ALIGN_MS 对齐以利于缓存。
-   */
   private buildRangeQuery(range: TimeRange = {}): URLSearchParams {
-    const endAt = range.endAt ?? this.alignedNow();
     return new URLSearchParams({
       startAt: (range.startAt ?? 0).toString(),
-      endAt: endAt.toString()
+      endAt: (range.endAt ?? this.alignedNow()).toString()
     });
   }
 
-  /**
-   * 构建缓存 key 中的时间范围部分。
-   * 当用户没有指定时间范围时，使用相同的对齐值确保 key 与请求一致。
-   */
   private buildRangeCacheQuery(range: TimeRange = {}): URLSearchParams {
     const qp = new URLSearchParams();
     qp.set('startAt', (range.startAt ?? 0).toString());
@@ -153,7 +141,6 @@ export class UmamiAPI {
     return qp;
   }
 
-  /** 将当前时间戳按 RANGE_ALIGN_MS 向下对齐 */
   private alignedNow(): number {
     return Math.floor(Date.now() / RANGE_ALIGN_MS) * RANGE_ALIGN_MS;
   }
@@ -173,7 +160,6 @@ export class UmamiAPI {
     );
   }
 
-  /** 实时数据，不缓存。 */
   async getActiveVisitors(baseUrl: string, shareId: string): Promise<{ visitors: number }> {
     const { websiteId } = await this.getShareData(baseUrl, shareId);
     return this.authedFetch(baseUrl, shareId, `/websites/${websiteId}/active`);
@@ -182,8 +168,7 @@ export class UmamiAPI {
   async getWebsite(baseUrl: string, shareId: string): Promise<Cached<WebsiteInfo>> {
     const { websiteId } = await this.getShareData(baseUrl, shareId);
     return this.cachedGet<WebsiteInfo>(
-      baseUrl,
-      shareId,
+      baseUrl, shareId,
       `/websites/${websiteId}`,
       `${baseUrl}|${shareId}|website`
     );
@@ -192,8 +177,7 @@ export class UmamiAPI {
   async getDateRange(baseUrl: string, shareId: string): Promise<Cached<DateRange>> {
     const { websiteId } = await this.getShareData(baseUrl, shareId);
     return this.cachedGet<DateRange>(
-      baseUrl,
-      shareId,
+      baseUrl, shareId,
       `/websites/${websiteId}/daterange`,
       `${baseUrl}|${shareId}|daterange`
     );
@@ -212,8 +196,7 @@ export class UmamiAPI {
     cacheQp.set('unit', params.unit ?? 'day');
     cacheQp.set('timezone', params.timezone ?? 'UTC');
     return this.cachedGet<PageviewsSeries>(
-      baseUrl,
-      shareId,
+      baseUrl, shareId,
       `/websites/${websiteId}/pageviews?${qp.toString()}`,
       `${baseUrl}|${shareId}|pageviews|${cacheQp.toString()}`
     );
@@ -234,13 +217,11 @@ export class UmamiAPI {
     if (typeof params.limit === 'number') cacheQp.set('limit', params.limit.toString());
     const cacheKey = `${baseUrl}|${shareId}|metrics|${cacheQp.toString()}`;
 
-    // CacheManager 只能存对象，数组包一层再缓存
     const cached = this.cacheManager.get(cacheKey) as { data: MetricEntry[] } | null;
     if (cached) return cached.data;
 
     const data = await this.authedFetch<MetricEntry[]>(
-      baseUrl,
-      shareId,
+      baseUrl, shareId,
       `/websites/${websiteId}/metrics?${qp.toString()}`
     );
     this.cacheManager.set(cacheKey, { data });

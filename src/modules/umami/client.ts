@@ -50,14 +50,7 @@ export class UmamiClient {
     this.api = new UmamiAPI(this.cacheManager);
   }
 
-  /**
-   * 按路径查询页面统计。
-   * `path` 会自动加上 `eq.` 前缀发送给 Umami API。
-   */
-  async getPageStats(
-    path: string,
-    options: Partial<StatsQueryParams> = {}
-  ): Promise<StatsResult> {
+  async getPageStats(path: string, options: Partial<StatsQueryParams> = {}): Promise<StatsResult> {
     const data = await this.api.getStats(this.baseUrl, this.shareId, {
       path: `eq.${path}`,
       ...options
@@ -65,14 +58,8 @@ export class UmamiClient {
     return toStatsResult(data);
   }
 
-  async getPageStatsByUrl(
-    url: string,
-    options: Partial<StatsQueryParams> = {}
-  ): Promise<StatsResult> {
-    const data = await this.api.getStats(this.baseUrl, this.shareId, {
-      url,
-      ...options
-    });
+  async getPageStatsByUrl(url: string, options: Partial<StatsQueryParams> = {}): Promise<StatsResult> {
+    const data = await this.api.getStats(this.baseUrl, this.shareId, { url, ...options });
     return toStatsResult(data);
   }
 
@@ -81,29 +68,24 @@ export class UmamiClient {
     return toStatsResult(data);
   }
 
-  /** 当前在线访客数（实时，不走缓存） */
   async getActiveVisitors(): Promise<number> {
     const data = await this.api.getActiveVisitors(this.baseUrl, this.shareId);
     return data.visitors ?? 0;
   }
 
-  /** 按时间聚合的 pageviews / sessions 序列 */
   async getPageviews(options: PageviewsParams = {}): Promise<PageviewsSeries> {
     const data = await this.api.getPageviews(this.baseUrl, this.shareId, options);
     return { pageviews: data.pageviews ?? [], sessions: data.sessions ?? [] };
   }
 
-  /** Top N 维度聚合（top 路径 / 国家 / 浏览器等） */
   getMetrics(type: MetricType, options: MetricsParams = {}): Promise<MetricEntry[]> {
     return this.api.getMetrics(this.baseUrl, this.shareId, type, options);
   }
 
-  /** 网站元信息（name / domain 等） */
   getWebsite(): Promise<WebsiteInfo> {
     return this.api.getWebsite(this.baseUrl, this.shareId);
   }
 
-  /** 此分享可用的数据范围 */
   getDateRange(): Promise<DateRange> {
     return this.api.getDateRange(this.baseUrl, this.shareId);
   }

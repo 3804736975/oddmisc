@@ -16,9 +16,7 @@ export class CacheManager<T = unknown> {
   }
 
   private loadStorage(): Record<string, { value: T; timestamp: number }> {
-    if (this.storageCache !== null) {
-      return this.storageCache;
-    }
+    if (this.storageCache !== null) return this.storageCache;
     if (!isBrowser) {
       this.storageCache = {};
     } else {
@@ -37,7 +35,7 @@ export class CacheManager<T = unknown> {
     try {
       localStorage.setItem(this.cacheKey, JSON.stringify(this.storageCache));
     } catch (e) {
-      console.warn('[oddmisc] localStorage 写入失败，缓存仅保留在内存中:', e instanceof Error ? e.message : e);
+      console.warn('[oddmisc] localStorage write failed:', e instanceof Error ? e.message : e);
     }
   }
 
@@ -45,30 +43,22 @@ export class CacheManager<T = unknown> {
     return Date.now() - timestamp >= this.ttl;
   }
 
-  /** 淘汰最旧的条目，确保不超过 maxEntries */
   private evictIfNeeded(): void {
     if (this.memoryCache.size <= this.maxEntries) return;
-
-    const entries = [...this.memoryCache.entries()];
-    entries.sort((a, b) => a[1].timestamp - b[1].timestamp);
+    const entries = [...this.memoryCache.entries()].sort((a, b) => a[1].timestamp - b[1].timestamp);
     const toRemove = entries.length - this.maxEntries;
     const storage = this.loadStorage();
     for (let i = 0; i < toRemove; i++) {
-      const key = entries[i][0];
-      this.memoryCache.delete(key);
-      delete storage[key];
+      this.memoryCache.delete(entries[i][0]);
+      delete storage[entries[i][0]];
     }
     this.saveStorage();
   }
 
   get(key: string): T | null {
     const memCached = this.memoryCache.get(key);
-    if (memCached && !this.isExpired(memCached.timestamp)) {
-      return memCached.value;
-    }
-    if (memCached) {
-      this.memoryCache.delete(key);
-    }
+    if (memCached && !this.isExpired(memCached.timestamp)) return memCached.value;
+    if (memCached) this.memoryCache.delete(key);
 
     const storage = this.loadStorage();
     const stored = storage[key];
@@ -80,19 +70,15 @@ export class CacheManager<T = unknown> {
       delete storage[key];
       this.saveStorage();
     }
-
     return null;
   }
 
   set(key: string, value: T): void {
-    const timestamp = Date.now();
-    const entry = { value, timestamp };
+    const entry = { value, timestamp: Date.now() };
     this.memoryCache.set(key, entry);
-
     const storage = this.loadStorage();
     storage[key] = entry;
     this.saveStorage();
-
     this.evictIfNeeded();
   }
 
@@ -100,9 +86,7 @@ export class CacheManager<T = unknown> {
     this.memoryCache.clear();
     this.storageCache = null;
     if (isBrowser) {
-      try {
-        localStorage.removeItem(this.cacheKey);
-      } catch { /* ignore */ }
+      try { localStorage.removeItem(this.cacheKey); } catch { /* ignore */ }
     }
   }
 
