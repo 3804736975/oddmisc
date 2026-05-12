@@ -1,19 +1,16 @@
 /**
- * 浏览器运行时客户端。
- * 此文件会被内联注入到页面，因此不能有任何外部依赖。
+ * 浏览器运行时客户端（IIFE 内联注入，不能有外部 import）。
  */
 
 const DEFAULT_TIMEOUT = 10000;
-
-// cloud.umami.is / 新版自托管 Umami 的 share token 鉴权必须同时带此 context 头。
 const SHARE_CONTEXT_HEADER = 'x-umami-share-context';
 const SHARE_CONTEXT_VALUE = '1';
+const CACHE_TTL = 3600000;
+const RANGE_ALIGN_MS = 5 * 60_000;
 
-async function fetchWithTimeout(
-  url: string,
-  options?: RequestInit,
-  timeout = DEFAULT_TIMEOUT
-): Promise<Response> {
+// --- utils ---
+
+async function fetchWithTimeout(url: string, options?: RequestInit, timeout = DEFAULT_TIMEOUT): Promise<Response> {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeout);
   try {
@@ -21,24 +18,6 @@ async function fetchWithTimeout(
   } finally {
     clearTimeout(timeoutId);
   }
-}
-
-interface UmamiRuntimeConfig {
-  shareUrl: string | false;
-}
-
-interface StatsResult {
-  pageviews: number;
-  visitors: number;
-  visits: number;
-  bounces?: number;
-  totaltime?: number;
-  _fromCache?: boolean;
-}
-
-interface ShareData {
-  websiteId: string;
-  token: string;
 }
 
 function extract(field: unknown): number {
@@ -53,20 +32,20 @@ function parseShareUrl(shareUrl: string): { apiBase: string; shareId: string } {
   const url = new URL(shareUrl);
   const pathParts = url.pathname.split('/');
   const shareIndex = pathParts.indexOf('share');
-
   if (shareIndex === -1 || shareIndex === pathParts.length - 1) {
     throw new Error('无效的分享 URL：未找到 share 路径');
   }
-
   const shareId = pathParts[shareIndex + 1];
-  if (!shareId) {
-    throw new Error('无效的分享 URL：缺少分享 ID');
-  }
-
+  if (!shareId) throw new Error('无效的分享 URL：缺少分享 ID');
   const pathBeforeShare = pathParts.slice(0, shareIndex).join('/');
-  const apiBase = `${url.protocol}//${url.host}${pathBeforeShare}/api`;
-  return { apiBase, shareId };
+  return { apiBase: `${url.protocol}//${url.host}${pathBeforeShare}/api`, shareId };
 }
+
+function alignedNow(): number {
+  return Math.floor(Date.now() / RANGE_ALIGN_MS) * RANGE_ALIGN_MS;
+}
+
+// --- cache ---
 
 class SimpleCache {
   private cache = new Map<string, { value: unknown; timestamp: number }>();
@@ -85,17 +64,17 @@ class SimpleCache {
           this.cache.set(key, entry);
         }
       }
-    } catch {}
+    } catch { /* ignore */ }
   }
 
   private saveToStorage(): void {
     try {
       const obj: Record<string, { value: unknown; timestamp: number }> = {};
-      this.cache.forEach((value, key) => {
-        obj[key] = value;
-      });
+      this.cache.forEach((v, k) => { obj[k] = v; });
       localStorage.setItem(this.storageKey, JSON.stringify(obj));
-    } catch {}
+    } catch (e) {
+      console.warn('[oddmisc] localStorage write failed:', e instanceof Error ? e.message : e);
+    }
   }
 
   private isExpired(timestamp: number): boolean {
@@ -104,13 +83,8 @@ class SimpleCache {
 
   get(key: string): unknown | null {
     const cached = this.cache.get(key);
-    if (cached && !this.isExpired(cached.timestamp)) {
-      return cached.value;
-    }
-    if (cached) {
-      this.cache.delete(key);
-      this.saveToStorage();
-    }
+    if (cached && !this.isExpired(cached.timestamp)) return cached.value;
+    if (cached) { this.cache.delete(key); this.saveToStorage(); }
     return null;
   }
 
@@ -121,11 +95,20 @@ class SimpleCache {
 
   clear(): void {
     this.cache.clear();
-    try {
-      localStorage.removeItem(this.storageKey);
-    } catch {}
+    try { localStorage.removeItem(this.storageKey); } catch { /* ignore */ }
   }
 }
+
+// --- types ---
+
+interface UmamiRuntimeConfig { shareUrl: string | false; }
+interface StatsResult {
+  pageviews: number; visitors: number; visits: number;
+  bounces?: number; totaltime?: number; _fromCache?: boolean;
+}
+interface ShareData { websiteId: string; token: string; }
+
+// --- client ---
 
 class UmamiRuntimeClient {
   private apiBase: string;
@@ -135,42 +118,33 @@ class UmamiRuntimeClient {
   private sharePromise: Promise<ShareData> | null = null;
 
   constructor(config: UmamiRuntimeConfig) {
-    if (!config.shareUrl) {
-      throw new Error('shareUrl 是必需参数');
-    }
+    if (!config.shareUrl) throw new Error('shareUrl 是必需参数');
     const { apiBase, shareId } = parseShareUrl(config.shareUrl);
     this.apiBase = apiBase;
     this.shareId = shareId;
-    this.cache = new SimpleCache(`umami-runtime-${shareId}`, 3600000);
+    this.cache = new SimpleCache(`umami-runtime-${shareId}`, CACHE_TTL);
   }
 
   private async getShareData(): Promise<ShareData> {
     if (this.shareData) return this.shareData;
     if (this.sharePromise) return this.sharePromise;
-
     this.sharePromise = (async (): Promise<ShareData> => {
       const res = await fetchWithTimeout(`${this.apiBase}/share/${this.shareId}`);
-      if (!res.ok) {
-        this.sharePromise = null;
-        throw new Error(`获取分享信息失败: ${res.status}`);
-      }
+      if (!res.ok) { this.sharePromise = null; throw new Error(`获取分享信息失败: ${res.status}`); }
       const data = await res.json();
       this.shareData = data;
       return data;
     })();
-
     return this.sharePromise;
   }
 
   private async authedFetch<T>(path: string): Promise<T> {
     const { websiteId, token } = await this.getShareData();
     const res = await fetchWithTimeout(`${this.apiBase}/websites/${websiteId}${path}`, {
-      headers: {
-        'x-umami-share-token': token,
-        [SHARE_CONTEXT_HEADER]: SHARE_CONTEXT_VALUE
-      }
+      headers: { 'x-umami-share-token': token, [SHARE_CONTEXT_HEADER]: SHARE_CONTEXT_VALUE }
     });
     if (!res.ok) {
+      if (res.status === 401) { this.shareData = null; this.sharePromise = null; }
       throw new Error(`请求 ${path} 失败: ${res.status}`);
     }
     return (await res.json()) as T;
@@ -181,10 +155,7 @@ class UmamiRuntimeClient {
     const cached = this.cache.get(cacheKey) as StatsResult | null;
     if (cached) return { ...cached, _fromCache: true };
 
-    const params = new URLSearchParams({
-      startAt: '0',
-      endAt: Date.now().toString()
-    });
+    const params = new URLSearchParams({ startAt: '0', endAt: alignedNow().toString() });
     if (path) params.set('path', `eq.${path}`);
 
     const data = await this.authedFetch<Record<string, unknown>>(`/stats?${params.toString()}`);
@@ -195,18 +166,12 @@ class UmamiRuntimeClient {
     };
     if (data.bounces !== undefined) result.bounces = extract(data.bounces);
     if (data.totaltime !== undefined) result.totaltime = extract(data.totaltime);
-
     this.cache.set(cacheKey, result);
     return result;
   }
 
-  getSiteStats(): Promise<StatsResult> {
-    return this.getStats();
-  }
-
-  getPageStats(path: string): Promise<StatsResult> {
-    return this.getStats(path);
-  }
+  getSiteStats(): Promise<StatsResult> { return this.getStats(); }
+  getPageStats(path: string): Promise<StatsResult> { return this.getStats(path); }
 
   async getActiveVisitors(): Promise<number> {
     const data = await this.authedFetch<{ visitors?: number }>('/active');
@@ -220,14 +185,13 @@ class UmamiRuntimeClient {
   }
 }
 
+// --- mount ---
+
 function mountEmptyClient(): void {
   const zeroStats = () => Promise.resolve({ pageviews: 0, visitors: 0, visits: 0 });
   (window as typeof window & { oddmisc?: Record<string, unknown> }).oddmisc = {
-    getStats: zeroStats,
-    getSiteStats: zeroStats,
-    getPageStats: zeroStats,
-    getActiveVisitors: () => Promise.resolve(0),
-    clearCache: () => {}
+    getStats: zeroStats, getSiteStats: zeroStats, getPageStats: zeroStats,
+    getActiveVisitors: () => Promise.resolve(0), clearCache: () => {}
   };
 }
 

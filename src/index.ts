@@ -2,7 +2,7 @@
 export { VERSION } from './shared';
 
 // 错误类
-export { UmamiError, UmamiUrlError, UmamiAuthError, UmamiNetworkError } from './errors';
+export { UmamiError, UmamiUrlError, UmamiAuthError, UmamiNetworkError, UmamiTimeoutError } from './errors';
 
 // Umami 模块
 export { UmamiClient, createUmamiClient } from './modules/umami/client';
