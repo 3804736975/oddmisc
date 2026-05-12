@@ -50,6 +50,10 @@ export class UmamiClient {
     this.api = new UmamiAPI(this.cacheManager);
   }
 
+  /**
+   * 按路径查询页面统计。
+   * `path` 会自动加上 `eq.` 前缀发送给 Umami API。
+   */
   async getPageStats(
     path: string,
     options: Partial<StatsQueryParams> = {}
@@ -106,7 +110,7 @@ export class UmamiClient {
 
   clearCache(): void {
     this.cacheManager.clear();
-    this.api.clearShareCache();
+    this.api.clearShareCache(this.baseUrl, this.shareId);
   }
 }
 

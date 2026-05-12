@@ -16,6 +16,9 @@ import { UmamiNetworkError, UmamiAuthError } from '../../errors';
 const SHARE_CONTEXT_HEADER = 'x-umami-share-context';
 const SHARE_CONTEXT_VALUE = '1';
 
+/** 5 分钟对齐粒度（ms），用于 endAt 默认值，减少不必要的缓存未命中 */
+const RANGE_ALIGN_MS = 5 * 60_000;
+
 interface StatsAPIParams extends Partial<StatsQueryParams> {
   path?: string;
   hostname?: string;
@@ -56,22 +59,34 @@ export interface MetricsParams extends TimeRange {
 type Cached<T> = T & { _fromCache?: boolean };
 
 export class UmamiAPI {
-  private sharePromise: Promise<ShareData> | null = null;
+  /** 按 `baseUrl|shareId` 索引的 share data 缓存，避免单例冲突 */
+  private sharePromises = new Map<string, Promise<ShareData>>();
 
   constructor(private readonly cacheManager: CacheManager) {}
 
-  async getShareData(baseUrl: string, shareId: string): Promise<ShareData> {
-    if (!this.sharePromise) {
-      this.sharePromise = this.fetchShareData(baseUrl, shareId).catch((err) => {
-        this.sharePromise = null;
-        throw err;
-      });
-    }
-    return this.sharePromise;
+  private shareKey(baseUrl: string, shareId: string): string {
+    return `${baseUrl}|${shareId}`;
   }
 
-  clearShareCache(): void {
-    this.sharePromise = null;
+  async getShareData(baseUrl: string, shareId: string): Promise<ShareData> {
+    const key = this.shareKey(baseUrl, shareId);
+    let promise = this.sharePromises.get(key);
+    if (!promise) {
+      promise = this.fetchShareData(baseUrl, shareId).catch((err) => {
+        this.sharePromises.delete(key);
+        throw err;
+      });
+      this.sharePromises.set(key, promise);
+    }
+    return promise;
+  }
+
+  clearShareCache(baseUrl?: string, shareId?: string): void {
+    if (baseUrl && shareId) {
+      this.sharePromises.delete(this.shareKey(baseUrl, shareId));
+    } else {
+      this.sharePromises.clear();
+    }
   }
 
   private async fetchShareData(baseUrl: string, shareId: string): Promise<ShareData> {
@@ -93,8 +108,8 @@ export class UmamiAPI {
 
     if (!res.ok) {
       if (res.status === 401) {
-        this.cacheManager.clear();
-        this.sharePromise = null;
+        // 只清除当前 share 的认证缓存，不清空所有统计数据缓存
+        this.sharePromises.delete(this.shareKey(baseUrl, shareId));
         throw new UmamiAuthError('认证失败，请检查 shareId', res.status);
       }
       throw new UmamiNetworkError(`请求 ${path} 失败: ${res.status}`, res.status);
@@ -115,30 +130,41 @@ export class UmamiAPI {
     return data;
   }
 
+  /**
+   * 构建发送给 Umami API 的时间范围参数。
+   * 当用户没有指定 endAt 时，按 RANGE_ALIGN_MS 对齐以利于缓存。
+   */
   private buildRangeQuery(range: TimeRange = {}): URLSearchParams {
+    const endAt = range.endAt ?? this.alignedNow();
     return new URLSearchParams({
       startAt: (range.startAt ?? 0).toString(),
-      endAt: (range.endAt ?? Date.now()).toString()
+      endAt: endAt.toString()
     });
   }
 
+  /**
+   * 构建缓存 key 中的时间范围部分。
+   * 当用户没有指定时间范围时，使用相同的对齐值确保 key 与请求一致。
+   */
   private buildRangeCacheQuery(range: TimeRange = {}): URLSearchParams {
     const qp = new URLSearchParams();
-    if (typeof range.startAt === 'number') qp.set('startAt', range.startAt.toString());
-    if (typeof range.endAt === 'number') qp.set('endAt', range.endAt.toString());
+    qp.set('startAt', (range.startAt ?? 0).toString());
+    qp.set('endAt', (range.endAt ?? this.alignedNow()).toString());
     return qp;
+  }
+
+  /** 将当前时间戳按 RANGE_ALIGN_MS 向下对齐 */
+  private alignedNow(): number {
+    return Math.floor(Date.now() / RANGE_ALIGN_MS) * RANGE_ALIGN_MS;
   }
 
   async getStats(baseUrl: string, shareId: string, params: StatsAPIParams): Promise<StatsAPIResponse> {
     const { websiteId } = await this.getShareData(baseUrl, shareId);
     const qp = this.buildRangeQuery(params);
     const cacheQp = this.buildRangeCacheQuery(params);
-    if (params.path) qp.set('path', params.path);
-    if (params.url) qp.set('url', params.url);
-    if (params.hostname) qp.set('hostname', params.hostname);
-    if (params.path) cacheQp.set('path', params.path);
-    if (params.url) cacheQp.set('url', params.url);
-    if (params.hostname) cacheQp.set('hostname', params.hostname);
+    if (params.path) { qp.set('path', params.path); cacheQp.set('path', params.path); }
+    if (params.url) { qp.set('url', params.url); cacheQp.set('url', params.url); }
+    if (params.hostname) { qp.set('hostname', params.hostname); cacheQp.set('hostname', params.hostname); }
     return this.cachedGet<StatsAPIResponse>(
       baseUrl,
       shareId,

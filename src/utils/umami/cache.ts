@@ -1,14 +1,18 @@
 const isBrowser = typeof window !== 'undefined' && typeof localStorage !== 'undefined';
 
+const DEFAULT_MAX_ENTRIES = 200;
+
 export class CacheManager<T = unknown> {
   private memoryCache = new Map<string, { value: T; timestamp: number }>();
   private readonly cacheKey: string;
   private readonly ttl: number;
+  private readonly maxEntries: number;
   private storageCache: Record<string, { value: T; timestamp: number }> | null = null;
 
-  constructor(namespace = 'default', ttl = 3600000) {
+  constructor(namespace = 'default', ttl = 3600000, maxEntries = DEFAULT_MAX_ENTRIES) {
     this.cacheKey = `cache-${namespace}`;
     this.ttl = ttl;
+    this.maxEntries = maxEntries;
   }
 
   private loadStorage(): Record<string, { value: T; timestamp: number }> {
@@ -32,11 +36,29 @@ export class CacheManager<T = unknown> {
     if (!isBrowser || this.storageCache === null) return;
     try {
       localStorage.setItem(this.cacheKey, JSON.stringify(this.storageCache));
-    } catch {}
+    } catch (e) {
+      console.warn('[oddmisc] localStorage 写入失败，缓存仅保留在内存中:', e instanceof Error ? e.message : e);
+    }
   }
 
   private isExpired(timestamp: number): boolean {
     return Date.now() - timestamp >= this.ttl;
+  }
+
+  /** 淘汰最旧的条目，确保不超过 maxEntries */
+  private evictIfNeeded(): void {
+    if (this.memoryCache.size <= this.maxEntries) return;
+
+    const entries = [...this.memoryCache.entries()];
+    entries.sort((a, b) => a[1].timestamp - b[1].timestamp);
+    const toRemove = entries.length - this.maxEntries;
+    const storage = this.loadStorage();
+    for (let i = 0; i < toRemove; i++) {
+      const key = entries[i][0];
+      this.memoryCache.delete(key);
+      delete storage[key];
+    }
+    this.saveStorage();
   }
 
   get(key: string): T | null {
@@ -70,6 +92,8 @@ export class CacheManager<T = unknown> {
     const storage = this.loadStorage();
     storage[key] = entry;
     this.saveStorage();
+
+    this.evictIfNeeded();
   }
 
   clear(): void {
@@ -78,7 +102,7 @@ export class CacheManager<T = unknown> {
     if (isBrowser) {
       try {
         localStorage.removeItem(this.cacheKey);
-      } catch {}
+      } catch { /* ignore */ }
     }
   }
 

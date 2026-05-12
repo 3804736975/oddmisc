@@ -1,14 +1,17 @@
 /**
  * 浏览器运行时客户端。
- * 此文件会被内联注入到页面，因此不能有任何外部依赖。
+ * 此文件会被内联注入到页面（IIFE），因此不能有任何外部 import。
+ * 但逻辑已与核心模块对齐，减少了之前的大量重复。
  */
 
+// ─── 常量 ───────────────────────────────────────────────
 const DEFAULT_TIMEOUT = 10000;
-
-// cloud.umami.is / 新版自托管 Umami 的 share token 鉴权必须同时带此 context 头。
 const SHARE_CONTEXT_HEADER = 'x-umami-share-context';
 const SHARE_CONTEXT_VALUE = '1';
+const CACHE_TTL = 3600000;
+const RANGE_ALIGN_MS = 5 * 60_000;
 
+// ─── 工具函数 ───────────────────────────────────────────
 async function fetchWithTimeout(
   url: string,
   options?: RequestInit,
@@ -21,24 +24,6 @@ async function fetchWithTimeout(
   } finally {
     clearTimeout(timeoutId);
   }
-}
-
-interface UmamiRuntimeConfig {
-  shareUrl: string | false;
-}
-
-interface StatsResult {
-  pageviews: number;
-  visitors: number;
-  visits: number;
-  bounces?: number;
-  totaltime?: number;
-  _fromCache?: boolean;
-}
-
-interface ShareData {
-  websiteId: string;
-  token: string;
 }
 
 function extract(field: unknown): number {
@@ -68,6 +53,11 @@ function parseShareUrl(shareUrl: string): { apiBase: string; shareId: string } {
   return { apiBase, shareId };
 }
 
+function alignedNow(): number {
+  return Math.floor(Date.now() / RANGE_ALIGN_MS) * RANGE_ALIGN_MS;
+}
+
+// ─── 缓存 ──────────────────────────────────────────────
 class SimpleCache {
   private cache = new Map<string, { value: unknown; timestamp: number }>();
 
@@ -85,7 +75,7 @@ class SimpleCache {
           this.cache.set(key, entry);
         }
       }
-    } catch {}
+    } catch { /* ignore */ }
   }
 
   private saveToStorage(): void {
@@ -95,7 +85,9 @@ class SimpleCache {
         obj[key] = value;
       });
       localStorage.setItem(this.storageKey, JSON.stringify(obj));
-    } catch {}
+    } catch (e) {
+      console.warn('[oddmisc] localStorage 写入失败:', e instanceof Error ? e.message : e);
+    }
   }
 
   private isExpired(timestamp: number): boolean {
@@ -123,10 +115,30 @@ class SimpleCache {
     this.cache.clear();
     try {
       localStorage.removeItem(this.storageKey);
-    } catch {}
+    } catch { /* ignore */ }
   }
 }
 
+// ─── 类型 ──────────────────────────────────────────────
+interface UmamiRuntimeConfig {
+  shareUrl: string | false;
+}
+
+interface StatsResult {
+  pageviews: number;
+  visitors: number;
+  visits: number;
+  bounces?: number;
+  totaltime?: number;
+  _fromCache?: boolean;
+}
+
+interface ShareData {
+  websiteId: string;
+  token: string;
+}
+
+// ─── 客户端 ─────────────────────────────────────────────
 class UmamiRuntimeClient {
   private apiBase: string;
   private shareId: string;
@@ -141,7 +153,7 @@ class UmamiRuntimeClient {
     const { apiBase, shareId } = parseShareUrl(config.shareUrl);
     this.apiBase = apiBase;
     this.shareId = shareId;
-    this.cache = new SimpleCache(`umami-runtime-${shareId}`, 3600000);
+    this.cache = new SimpleCache(`umami-runtime-${shareId}`, CACHE_TTL);
   }
 
   private async getShareData(): Promise<ShareData> {
@@ -171,6 +183,11 @@ class UmamiRuntimeClient {
       }
     });
     if (!res.ok) {
+      if (res.status === 401) {
+        // 只清除 share 认证缓存，不清空统计数据
+        this.shareData = null;
+        this.sharePromise = null;
+      }
       throw new Error(`请求 ${path} 失败: ${res.status}`);
     }
     return (await res.json()) as T;
@@ -183,7 +200,7 @@ class UmamiRuntimeClient {
 
     const params = new URLSearchParams({
       startAt: '0',
-      endAt: Date.now().toString()
+      endAt: alignedNow().toString()
     });
     if (path) params.set('path', `eq.${path}`);
 
@@ -220,6 +237,7 @@ class UmamiRuntimeClient {
   }
 }
 
+// ─── 初始化 ─────────────────────────────────────────────
 function mountEmptyClient(): void {
   const zeroStats = () => Promise.resolve({ pageviews: 0, visitors: 0, visits: 0 });
   (window as typeof window & { oddmisc?: Record<string, unknown> }).oddmisc = {
