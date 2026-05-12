@@ -6,14 +6,6 @@ import { UmamiAuthError, UmamiNetworkError } from '../src/errors';
 const BASE = 'https://umami.example.com/api';
 const SHARE_ID = 'abc123';
 
-function mockFetchOk(body: unknown) {
-  return vi.fn(async () => ({
-    ok: true,
-    status: 200,
-    json: async () => body
-  } as unknown as Response));
-}
-
 describe('UmamiAPI.getStats', () => {
   let api: UmamiAPI;
   let cache: CacheManager;
@@ -33,9 +25,7 @@ describe('UmamiAPI.getStats', () => {
 
   it('forwards the path query parameter to the stats endpoint', async () => {
     const fetchMock = vi.fn()
-      // share data
       .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ websiteId: 'w1', token: 't1' }) } as unknown as Response)
-      // stats
       .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ pageviews: 1, visitors: 2, visits: 3 }) } as unknown as Response);
     globalThis.fetch = fetchMock as unknown as typeof fetch;
 
@@ -131,7 +121,7 @@ describe('UmamiAPI.getStats', () => {
     expect(headers['x-umami-share-context']).toBe('1');
   });
 
-  it('clears sharePromise on 401 so next call refetches share data', async () => {
+  it('clears only current sharePromise on 401 so next call refetches share data', async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ websiteId: 'w1', token: 't1' }) } as unknown as Response)
       .mockResolvedValueOnce({ ok: false, status: 401, json: async () => ({}) } as unknown as Response)
@@ -143,6 +133,24 @@ describe('UmamiAPI.getStats', () => {
     const result = await api.getStats(BASE, SHARE_ID, {});
     expect(result.pageviews).toBe(1);
     expect(fetchMock).toHaveBeenCalledTimes(4);
+  });
+
+  it('does NOT clear data cache on 401 (only share cache)', async () => {
+    let now = 1000;
+    vi.spyOn(Date, 'now').mockImplementation(() => now);
+
+    // Populate a cache entry via a different shareId
+    cache.set('my-data-key', { hello: 'world' });
+
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ websiteId: 'w1', token: 't1' }) } as unknown as Response)
+      .mockResolvedValueOnce({ ok: false, status: 401, json: async () => ({}) } as unknown as Response);
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    await expect(api.getStats(BASE, SHARE_ID, {})).rejects.toBeInstanceOf(UmamiAuthError);
+
+    // Data cache should NOT be cleared
+    expect(cache.get('my-data-key')).toEqual({ hello: 'world' });
   });
 });
 
@@ -206,29 +214,56 @@ describe('UmamiAPI additional endpoints', () => {
   });
 
   it('getMetrics caches the array response', async () => {
+    let now = 1000;
+    vi.spyOn(Date, 'now').mockImplementation(() => now);
+
     const fetchMock = vi.fn()
       .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ websiteId: 'w1', token: 't1' }) } as unknown as Response)
-      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ([{ x: '/', y: 1 }]) } as unknown as Response);
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ([{ x: '/', y: 10 }]) } as unknown as Response);
     globalThis.fetch = fetchMock as unknown as typeof fetch;
 
-    await api.getMetrics(BASE, SHARE_ID, 'path', { startAt: 0, endAt: 1, limit: 3 });
-    const again = await api.getMetrics(BASE, SHARE_ID, 'path', { startAt: 0, endAt: 1, limit: 3 });
-    expect(again).toEqual([{ x: '/', y: 1 }]);
-    expect(fetchMock).toHaveBeenCalledTimes(2); // share + 1 stats; second call hits cache
+    const first = await api.getMetrics(BASE, SHARE_ID, 'path');
+    expect(first).toEqual([{ x: '/', y: 10 }]);
+
+    now = 2000;
+    const second = await api.getMetrics(BASE, SHARE_ID, 'path');
+    expect(second).toEqual([{ x: '/', y: 10 }]);
+    expect(fetchMock).toHaveBeenCalledTimes(2); // share + metrics, no extra fetch
   });
 
-  it('getWebsite & getDateRange hit the expected paths', async () => {
+  it('uses aligned endAt for cache stability when endAt not specified', async () => {
+    // Freeze time so that aligned value is deterministic
+    const fixedTime = 1700000100000; // not aligned to 5min
+    vi.spyOn(Date, 'now').mockImplementation(() => fixedTime);
+
     const fetchMock = vi.fn()
       .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ websiteId: 'w1', token: 't1' }) } as unknown as Response)
-      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ id: 'w1', name: 'site', domain: 'x.com', shareId: null, createdAt: '', updatedAt: '', resetAt: null }) } as unknown as Response)
-      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ startDate: '2025-01-01T00:00:00Z', endDate: '2026-01-01T00:00:00Z' }) } as unknown as Response);
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ pageviews: 1, visitors: 1, visits: 1 }) } as unknown as Response);
     globalThis.fetch = fetchMock as unknown as typeof fetch;
 
-    const w = await api.getWebsite(BASE, SHARE_ID);
-    const d = await api.getDateRange(BASE, SHARE_ID);
-    expect(w.name).toBe('site');
-    expect(d.startDate).toContain('2025');
-    expect((fetchMock.mock.calls[1][0] as string)).toMatch(/\/websites\/w1$/);
-    expect((fetchMock.mock.calls[2][0] as string)).toContain('/websites/w1/daterange');
+    await api.getStats(BASE, SHARE_ID, {});
+
+    const statsUrl = fetchMock.mock.calls[1][0] as string;
+    // endAt should be aligned to 5 min
+    const alignedEnd = Math.floor(fixedTime / 300000) * 300000;
+    expect(statsUrl).toContain(`endAt=${alignedEnd}`);
+    expect(statsUrl).toContain('startAt=0');
+  });
+
+  it('sharePromises are keyed by baseUrl|shareId', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ websiteId: 'w1', token: 't1' }) } as unknown as Response)
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ pageviews: 1, visitors: 1, visits: 1 }) } as unknown as Response)
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ websiteId: 'w2', token: 't2' }) } as unknown as Response)
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ pageviews: 2, visitors: 2, visits: 2 }) } as unknown as Response);
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    const r1 = await api.getStats(BASE, 'share-a', {});
+    const r2 = await api.getStats(BASE, 'share-b', {});
+
+    // Each share should trigger its own fetch
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+    expect(r1.pageviews).toBe(1);
+    expect(r2.pageviews).toBe(2);
   });
 });

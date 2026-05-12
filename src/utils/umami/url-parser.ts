@@ -1,13 +1,8 @@
 import { UmamiUrlError } from '../../errors';
 
-/**
- * 解析 Umami 分享 URL
- * 支持标准格式和 cloud.umami.is 格式
- */
 export function parseShareUrl(shareUrl: string): { apiBase: string; shareId: string } {
   try {
     const url = new URL(shareUrl);
-
     const pathParts = url.pathname.split('/');
     const shareIndex = pathParts.indexOf('share');
 
@@ -16,19 +11,13 @@ export function parseShareUrl(shareUrl: string): { apiBase: string; shareId: str
     }
 
     const shareId = pathParts[shareIndex + 1];
-
-    if (!shareId) {
-      throw new UmamiUrlError('缺少分享 ID');
-    }
+    if (!shareId) throw new UmamiUrlError('缺少分享 ID');
 
     const pathBeforeShare = pathParts.slice(0, shareIndex).join('/');
     const apiBase = `${url.protocol}//${url.host}${pathBeforeShare}/api`;
-
     return { apiBase, shareId };
   } catch (error) {
-    if (error instanceof UmamiUrlError) {
-      throw error;
-    }
+    if (error instanceof UmamiUrlError) throw error;
     throw new UmamiUrlError(`无效的 URL 格式: ${error instanceof Error ? error.message : '未知错误'}`);
   }
 }

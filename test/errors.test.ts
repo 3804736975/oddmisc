@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { UmamiError, UmamiUrlError, UmamiAuthError, UmamiNetworkError } from '../src/errors';
+import { UmamiError, UmamiUrlError, UmamiAuthError, UmamiNetworkError, UmamiTimeoutError } from '../src/errors';
 
 describe('Custom Errors', () => {
   it('UmamiError should have correct properties', () => {
@@ -31,9 +31,26 @@ describe('Custom Errors', () => {
     expect(error.name).toBe('UmamiNetworkError');
   });
 
-  it('all errors should be instances of Error', () => {
+  it('UmamiTimeoutError should have TIMEOUT code and default message', () => {
+    const error = new UmamiTimeoutError();
+    expect(error.code).toBe('TIMEOUT');
+    expect(error.status).toBeUndefined();
+    expect(error.name).toBe('UmamiTimeoutError');
+    expect(error.message).toBe('请求超时');
+  });
+
+  it('UmamiTimeoutError should accept custom message', () => {
+    const error = new UmamiTimeoutError('自定义超时');
+    expect(error.message).toBe('自定义超时');
+    expect(error.code).toBe('TIMEOUT');
+  });
+
+  it('all errors should be instances of Error and UmamiError', () => {
     expect(new UmamiUrlError('test')).toBeInstanceOf(Error);
+    expect(new UmamiUrlError('test')).toBeInstanceOf(UmamiError);
     expect(new UmamiAuthError('test')).toBeInstanceOf(Error);
     expect(new UmamiNetworkError('test')).toBeInstanceOf(Error);
+    expect(new UmamiTimeoutError()).toBeInstanceOf(Error);
+    expect(new UmamiTimeoutError()).toBeInstanceOf(UmamiError);
   });
 });

@@ -30,3 +30,10 @@ export class UmamiNetworkError extends UmamiError {
     this.name = 'UmamiNetworkError';
   }
 }
+
+export class UmamiTimeoutError extends UmamiError {
+  constructor(message = '请求超时') {
+    super(message, 'TIMEOUT');
+    this.name = 'UmamiTimeoutError';
+  }
+}
