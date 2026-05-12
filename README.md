@@ -9,7 +9,7 @@
 
 - **零运行时依赖**：仅依赖平台自带的 `fetch` / `URL` / `localStorage`。
 - **双端通用**：同一份 API 同时可在 Node 与浏览器中使用。
-- **内存 + localStorage 双级缓存**：默认 1 小时 TTL，浏览器刷新后仍然命中缓存。
+- **内存 + localStorage 双级缓存**：默认 1 小时 TTL，内置 LRU 淘汰，浏览器刷新后仍然命中缓存。
 - **Astro 集成**：一行配置自动向页面注入运行时客户端，并挂载到 `window.oddmisc`。
 - **完整类型声明**：CJS / ESM 双格式输出，附带 `.d.ts`。
 
@@ -72,10 +72,26 @@ const range = await client.getDateRange();
 
 ### Astro 集成
 
-在 `astro.config.mjs` 中加入：
+推荐使用 `oddmisc()` 统一入口，通过嵌套配置管理所有模块：
 
 ```js
 import { defineConfig } from 'astro/config';
+import { oddmisc } from 'oddmisc/astro';
+
+export default defineConfig({
+  integrations: [
+    oddmisc({
+      umami: {
+        shareUrl: 'https://your-umami-instance.com/share/<shareId>'
+      }
+    })
+  ]
+});
+```
+
+也可以直接使用 `umami()` 单模块入口（向下兼容）：
+
+```js
 import { umami } from 'oddmisc/astro';
 
 export default defineConfig({
@@ -90,6 +106,8 @@ export default defineConfig({
 如需临时禁用注入，将 `shareUrl` 设为 `false` 即可：
 
 ```js
+oddmisc({ umami: { shareUrl: false } });
+// 或
 umami({ shareUrl: false });
 ```
 
@@ -102,11 +120,11 @@ const site = await window.oddmisc.getSiteStats();
 // 指定页面
 const about = await window.oddmisc.getPageStats('/about');
 
-// 直接访问底层 client（同一接口）
+// 直接访问底层 client
 const client = window.oddmisc.umami;
 ```
 
-脚本初始化完成后会派发 `oddmisc-ready` 事件，可用于避免在客户端上出现竞态：
+脚本初始化完成后会派发 `oddmisc-ready` 事件：
 
 ```js
 window.addEventListener('oddmisc-ready', (e) => {
@@ -136,9 +154,9 @@ window.addEventListener('oddmisc-ready', (e) => {
 | `getDateRange()` | 此分享可用的数据范围 |
 | `clearCache()` | 清空内存 + localStorage 缓存，以及已缓存的 share token |
 
-`options` 支持 `startAt` / `endAt`（毫秒时间戳），默认 `startAt=0` 到 `endAt=Date.now()`，即「建站起至今」。
+`options` 支持 `startAt` / `endAt`（毫秒时间戳），默认 `startAt=0`，`endAt` 按 5 分钟对齐的当前时间。
 
-`getMetrics(type)` 支持的维度（与 Umami v2 对齐）：`path`、`referrer`、`browser`、`os`、`device`、`country`、`region`、`city`、`event`、`title`、`language`、`screen`、`tag`。**注意** `cloud.umami.is` 对 `url` / `host` 会返回 400，因此这两种没有放在类型中。
+`getMetrics(type)` 支持的维度：`path`、`referrer`、`browser`、`os`、`device`、`country`、`region`、`city`、`event`、`title`、`language`、`screen`、`tag`。
 
 统一的统计返回结构：
 
@@ -147,11 +165,8 @@ interface StatsResult {
   pageviews: number;
   visitors: number;
   visits: number;
-  /** Umami v2+ 返回，表示跳出数 */
   bounces?: number;
-  /** Umami v2+ 返回，总访问时长（秒） */
   totaltime?: number;
-  /** Umami v2+ 返回，与上一周期的对比 */
   comparison?: {
     pageviews?: number;
     visitors?: number;
@@ -162,8 +177,6 @@ interface StatsResult {
   _fromCache?: boolean;
 }
 ```
-
-> 针对 `cloud.umami.is` 与新版自托管 Umami，内部会自动附带 `x-umami-share-context: 1` 头；缺失该头时服务端会直接返回 401。
 
 ### 运行时 `initUmamiRuntime(config)`
 
@@ -181,25 +194,14 @@ initUmamiRuntime({ shareUrl: 'https://.../share/<id>' });
 所有错误都继承自 `UmamiError`（带 `code` 与可选 `status`）：
 
 - `UmamiUrlError` — `code: 'INVALID_URL'`，无效分享链接。
-- `UmamiAuthError` — `code: 'AUTH_FAILED'`，常见于 401，通常意味着 shareId 失效。
+- `UmamiAuthError` — `code: 'AUTH_FAILED'`，401，通常意味着 shareId 失效。
 - `UmamiNetworkError` — `code: 'NETWORK_ERROR'`，上游返回非预期状态码。
+- `UmamiTimeoutError` — `code: 'TIMEOUT'`，请求超时（默认 10s）。
 
 ### 工具类
 
 - `parseShareUrl(shareUrl)` — 解析分享链接，返回 `{ apiBase, shareId }`。
 - `CacheManager` — 通用的内存 + localStorage 双级缓存，可在其它场景复用。
-
-## 关于 Umami 分享 API
-
-经 `cloud.umami.is` 线上验证，本库使用如下端点（均以 `x-umami-share-token` + `x-umami-share-context: 1` 双头进行认证）：
-
-- `GET /api/share/<shareId>` — 解析 shareId，得到 `websiteId` + JWT `token`
-- `GET /api/websites/<websiteId>` — 网站元信息
-- `GET /api/websites/<websiteId>/stats?startAt&endAt[&path|url]` — 聚合统计
-- `GET /api/websites/<websiteId>/active` — 当前在线访客
-- `GET /api/websites/<websiteId>/pageviews?startAt&endAt&unit&timezone` — 时间序列
-- `GET /api/websites/<websiteId>/metrics?startAt&endAt&type[&limit]` — TopN 聚合
-- `GET /api/websites/<websiteId>/daterange` — 可用数据区间
 
 ## 支持的 Umami URL 格式
 
@@ -223,8 +225,3 @@ pnpm test:coverage   # 生成覆盖率报告
 ## License
 
 MIT © yCENzh
-
-## 相关链接
-
-- [Umami 官方站点](https://umami.is/)
-- [GitHub 仓库](https://github.com/yCENzh/oddmisc)
